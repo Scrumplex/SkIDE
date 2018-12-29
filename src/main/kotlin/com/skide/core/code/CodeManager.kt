@@ -86,9 +86,8 @@ class CodeManager {
         val lineSearched = item.value.split(" ")[0].toInt()
         Platform.runLater {
             val length = area.getLineContent(lineSearched).length
-            area.editor.call("revealLineInCenter", lineSearched)
-            area.editor.call("setSelection", area.createObjectFromMap(hashMapOf(Pair("startLineNumber", lineSearched),
-                    Pair("endLineNumber", lineSearched), Pair("startColumn", 0), Pair("endColumn", length + 1))))
+            area.moveLineToCenter(lineSearched)
+            area.setSelection(lineSearched, 1, lineSearched, length + 1)
             Platform.runLater {
                 gotoActivated = false
             }

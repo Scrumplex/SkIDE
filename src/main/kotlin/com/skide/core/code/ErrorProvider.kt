@@ -343,7 +343,7 @@ class ErrorProvider(val manager: CodeManager) {
         val array = area.getArray()
         var counter = 0
         errors.forEach {
-            array.setSlot(counter, area.createObjectFromMap(hashMapOf(
+            array.set(counter, area.createObjectFromMap(hashMapOf(
                     Pair("startLineNumber", it.startLine),
                     Pair("endLineNumber", it.endLine),
                     Pair("startColumn", it.startColumn),
@@ -352,8 +352,9 @@ class ErrorProvider(val manager: CodeManager) {
                     Pair("severity", it.severity.num))))
             counter++
         }
-        val obj = area.engine.executeScript("monaco.editor") as JSObject
-        obj.call("setModelMarkers", area.getModel(), area.getModel().call("getModeId"), array)
+        val obj = area.engine.executeJavaScriptAndReturnValue("monaco.editor").asObject()
+        val model = area.getModel()
+        obj.getProperty("setModelMarkers").asFunction().invoke(obj, model, model.getProperty("getModeId").asFunction().invoke(model), array)
 
     }
 }

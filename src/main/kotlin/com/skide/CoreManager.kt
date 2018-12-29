@@ -22,6 +22,13 @@ import javafx.stage.StageStyle
 import javafx.util.Duration
 import org.controlsfx.control.Notifications
 
+object Info {
+    const val version = "2019.1u2"
+    var classLoader: ClassLoader? = null
+    var prodMode = false
+
+}
+fun main(args: Array<String>) = CoreManager().bootstrap(args, null)
 
 class CoreManager {
 

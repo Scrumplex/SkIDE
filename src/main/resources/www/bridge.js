@@ -1,30 +1,10 @@
-window.console = {
-    log:function () {
-        xlogger.prePrint(0);
-        for (var i = 0, j = arguments.length; i < j; i++){
-            xlogger.log(arguments[i]);
-        }
-    } ,
-    warn:function () {
-        xlogger.prePrint(1);
-        for (var i = 0, j = arguments.length; i < j; i++){
-            xlogger.warn(arguments[i]);
-        }
-    },
-    error:function () {
-        xlogger.prePrint(2);
-        for (var i = 0, j = arguments.length; i < j; i++){
-            xlogger.error(arguments[i]);
-        }
-    }
-};
+
 var editor = null;
 var selection = null;
 
 function getDefaultOptions() {
     return {
         automaticLayout: true,
-        mouseWheelScrollSensitivity: 0.1,
         copyWithSyntaxHighlighting: false,
         insertSpaces: false
     };

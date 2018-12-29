@@ -3,7 +3,9 @@ package com.skide.core.code
 import com.skide.include.MethodParameter
 import com.skide.include.NodeType
 import com.skide.utils.EditorUtils
-import netscape.javascript.JSObject
+import com.teamdev.jxbrowser.chromium.JSArray
+import com.teamdev.jxbrowser.chromium.JSObject
+import com.teamdev.jxbrowser.chromium.JSValue
 import java.util.*
 
 class ReferenceProvider(val manager: CodeManager) {
@@ -11,13 +13,13 @@ class ReferenceProvider(val manager: CodeManager) {
 
     private fun getObj(line: Int, col: Int, len: Int, model: Any): JSObject {
         val obj = manager.area.getObject()
-        obj.setMember("uri", (model as JSObject).getMember("uri"))
-        obj.setMember("range", manager.area.createObjectFromMap(hashMapOf(Pair("startLineNumber", line),
+        obj.setProperty("uri", (model as JSObject).getProperty("uri"))
+        obj.setProperty("range", manager.area.createObjectFromMap(hashMapOf(Pair("startLineNumber", line),
                 Pair("endLineNumber", line), Pair("startColumn", col), Pair("endColumn", (col + len)))))
         return obj
     }
 
-    fun findReference(model: Any, lineNumber: Int, word: String, array: JSObject): JSObject {
+    fun findReference(model: Any, lineNumber: Int, word: String, array: JSArray): JSValue {
         var counter = 0
         val nodes = manager.parseResult
         val currentNode = EditorUtils.getLineNode(lineNumber, nodes)
@@ -31,7 +33,7 @@ class ReferenceProvider(val manager: CodeManager) {
                         if (node.getContent().replace(" ", "").contains("$name(")) {
                             val nLine = node.linenumber
                             val index = node.raw.indexOf(name)
-                            array.setSlot(counter, getObj(nLine, index + 1, name.length, model))
+                            array.set(counter, getObj(nLine, index + 1, name.length, model))
                             counter++
                         }
                     }
@@ -51,7 +53,7 @@ class ReferenceProvider(val manager: CodeManager) {
                             if (node == currentNode) continue
                             var index = node.raw.indexOf(searched)
                             while (index >= 0) {
-                                array.setSlot(counter, getObj(node.linenumber, index  + 1, searched.length, model))
+                                array.set(counter, getObj(node.linenumber, index  + 1, searched.length, model))
                                 counter++
                                 index = node.raw.indexOf(searched, index + 1)
                             }
@@ -69,7 +71,7 @@ class ReferenceProvider(val manager: CodeManager) {
                     if (node == currentNode) continue
                     var index = node.raw.indexOf(searched)
                     while (index >= 0) {
-                        array.setSlot(counter, getObj(node.linenumber, index + 1, searched.length, model))
+                        array.set(counter, getObj(node.linenumber, index + 1, searched.length, model))
                         counter++
                         index = node.raw.indexOf(searched, index + 1)
                     }
@@ -81,7 +83,7 @@ class ReferenceProvider(val manager: CodeManager) {
                     if (node == currentNode ||node.nodeType == NodeType.COMMENT) continue
                     var index = node.raw.indexOf(searched)
                     while (index >= 0) {
-                        array.setSlot(counter, getObj(node.linenumber, index + 1, searched.length, model))
+                        array.set(counter, getObj(node.linenumber, index + 1, searched.length, model))
                         counter++
                         index = node.raw.indexOf(searched, index + 1)
                     }
@@ -93,7 +95,7 @@ class ReferenceProvider(val manager: CodeManager) {
                 if(node.tabLevel == 0 || node == currentNode) continue
                 var index = node.raw.indexOf(searched)
                 while (index >= 0) {
-                    array.setSlot(counter, getObj(node.linenumber, index + 1, searched.length, model))
+                    array.set(counter, getObj(node.linenumber, index + 1, searched.length, model))
                     counter++
                     index = node.raw.indexOf(searched, index + 1)
                 }

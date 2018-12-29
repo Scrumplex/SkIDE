@@ -3,27 +3,25 @@
 package com.skide.core.code
 
 import com.skide.CoreManager
+import com.skide.core.code.autocomplete.AutoCompleteItem
+import com.skide.core.code.autocomplete.CompletionType
+import com.skide.core.code.autocomplete.addSuggestionToObject
 import com.skide.gui.ListViewPopUp
 import com.skide.gui.WebViewDebugger
+import com.skide.include.DocType
 import com.skide.include.OpenFileHolder
-import com.skide.utils.*
+import com.skide.utils.extensionToLang
+import com.teamdev.jxbrowser.chromium.Browser
+import com.teamdev.jxbrowser.chromium.JSArray
+import com.teamdev.jxbrowser.chromium.JSObject
+import com.teamdev.jxbrowser.chromium.JSValue
+import com.teamdev.jxbrowser.chromium.events.*
+import com.teamdev.jxbrowser.chromium.javafx.BrowserView
 import javafx.application.Platform
-import javafx.concurrent.Worker
-import javafx.event.EventHandler
-import javafx.scene.Scene
-import javafx.scene.control.Label
 import javafx.scene.input.Clipboard
 import javafx.scene.input.ClipboardContent
 import javafx.scene.input.DataFormat
 import javafx.scene.input.KeyCode
-import javafx.scene.layout.StackPane
-import javafx.scene.web.WebEngine
-import javafx.scene.web.WebEvent
-import javafx.scene.web.WebView
-import javafx.stage.Modality
-import javafx.stage.Stage
-import javafx.stage.StageStyle
-import netscape.javascript.JSObject
 import java.io.File
 import kotlin.system.measureTimeMillis
 
@@ -76,16 +74,16 @@ class EventHandler(private val area: CodeArea) {
     }
 
     fun findReferences(model: Any, position: Any, context: Any): Any {
-        val lineNumber = (position as JSObject).getMember("lineNumber") as Int
-        val column = position.getMember("column") as Int
+        val lineNumber = (position as JSObject).getProperty("lineNumber").asNumber().integer
+        val column = position.getProperty("column").asNumber().integer
         val word = area.getWordAtPosition(lineNumber, column)
         return area.codeManager.referenceProvider.findReference(model, lineNumber, word, area.getArray())
     }
 
     fun gotoCall(model: Any, position: Any, token: Any): Any {
         val pos = position as JSObject
-        val lineNumber = pos.getMember("lineNumber") as Int
-        val column = pos.getMember("column") as Int
+        val lineNumber = pos.getProperty("lineNumber").asNumber().integer
+        val column = pos.getProperty("column").asNumber().integer
 
         val result = area.openFileHolder.codeManager.definitonFinder.search(lineNumber, area.getWordAtPosition(lineNumber, column))
         val obj = area.getObject()
@@ -113,28 +111,32 @@ class EventHandler(private val area: CodeArea) {
             }
             return obj
         }
-        obj.setMember("range", area.createObjectFromMap(hashMapOf(
+        obj.setProperty("range", area.createObjectFromMap(hashMapOf(
                 Pair("startLineNumber", result.line),
                 Pair("endLineNumber", result.line),
                 Pair("startColumn", result.column),
                 Pair("endColumn", result.column))))
-        obj.setMember("uri", (model as JSObject).getMember("uri"))
+        obj.setProperty("uri", (model as JSObject).getProperty("uri"))
         return obj
     }
 
     fun autoCompleteRequest(doc: Any, pos: Any, token: Any, context: Any): JSObject {
         val array = area.getArray()
-        if (area.coreManager.configManager.get("auto_complete") == "true")
-            if (area.getCurrentColumn() < 3 && !area.getLineContent(area.getCurrentLine()).startsWith("\t"))
-                area.openFileHolder.codeManager.autoComplete.showGlobalAutoComplete(array)
-            else
-                area.openFileHolder.codeManager.autoComplete.showLocalAutoComplete(array)
+        println(measureTimeMillis {
+            if (area.coreManager.configManager.get("auto_complete") == "true")
+                if (area.getCurrentColumn() < 3 && !area.getLineContent(area.getCurrentLine()).startsWith("\t"))
+                    area.openFileHolder.codeManager.autoComplete.showGlobalAutoComplete(array)
+                else
+                    area.openFileHolder.codeManager.autoComplete.showLocalAutoComplete(array)
+        })
+
+
         return array
     }
 
     fun contextMenuEmit(ev: JSObject) {
-        if (((ev.getMember("event") as JSObject).getMember("leftButton") as Boolean) &&
-                !((ev.getMember("event") as JSObject).getMember("rightButton") as Boolean)) return
+        if (((ev.getProperty("event") as JSObject).getProperty("leftButton").booleanValue) &&
+                !((ev.getProperty("event") as JSObject).getProperty("rightButton").booleanValue)) return
 
         val selection = area.getSelection()
         if (selection.startColumn == selection.endColumn && selection.startLineNumber == selection.endLineNumber &&
@@ -161,15 +163,15 @@ class EditorActionBinder(val id: String, val cb: () -> Unit) {
 
 class EditorCommandBinder(val id: String, val cb: () -> Unit) {
     lateinit var instance: JSObject
-    fun activate() = instance.call("set", true)
-    fun deactivate() = instance.call("set", false)
+    fun activate() = instance.getProperty("set").asFunction().invoke(instance, true)
+    fun deactivate() = instance.getProperty("set").asFunction().invoke(instance, false)
 }
 
 class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea) -> Unit) {
 
     var line = 1
-    var view: WebView = WebView()
-    var engine: WebEngine
+    var view:BrowserView
+    var engine = Browser()
     lateinit var editor: JSObject
     lateinit var selection: JSObject
     lateinit var openFileHolder: OpenFileHolder
@@ -185,13 +187,15 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
         }
     }
 
-    fun getArray() = engine.executeScript("getArr();") as JSObject
-    fun getObject() = engine.executeScript("getObj();") as JSObject
-    fun getFunction() = engine.executeScript("getFunc();") as JSObject
-    fun getWindow() = engine.executeScript("window") as JSObject
-    fun getModel() = engine.executeScript("editor.getModel()") as JSObject
-    private fun startEditor(options: Any) {
-        editor = getWindow().call("startEditor", options) as JSObject
+    lateinit var addonItems:JSArray
+    lateinit var addonEvents:JSArray
+    fun getArray() = engine.executeJavaScriptAndReturnValue("getArr();").asArray()
+    fun getObject() = engine.executeJavaScriptAndReturnValue("getObj();").asObject()
+    fun getFunction() = engine.executeJavaScriptAndReturnValue("getFunc();").asFunction()
+    fun getWindow() = engine.executeJavaScriptAndReturnValue("window").asObject()
+    fun getModel() = engine.executeJavaScriptAndReturnValue("editor.getModel()").asObject()
+    private fun startEditor(options: JSValue) {
+        editor = getWindow().getProperty("startEditor").asFunction().invoke(getWindow(), options).asObject()
     }
 
     fun copySelectionToClipboard() {
@@ -207,9 +211,44 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
 
     fun focusEditor() {
         while (!view.isFocused) view.requestFocus()
-        editor.call("focus")
+        editor.getProperty("call").asFunction().invoke(editor)
     }
 
+    fun updateAddonCache() {
+        var count = 0
+        addonItems = getArray()
+        openFileHolder.openProject.addons.values.forEach {addon ->
+            addon.forEach { item ->
+                if (item.type != DocType.EVENT) {
+                    val name = "${item.name}:${item.type} - ${item.addon.name}"
+                    var adder = (if (item.pattern == "") item.name.toLowerCase() else item.pattern).replace("\n", "")
+                    //       if (item.type == DocType.CONDITION) if (!lineContent.contains("if ")) adder = "if $adder"
+                    if (item.type == DocType.CONDITION) adder += ":"
+                    addSuggestionToObject(AutoCompleteItem(this, name, CompletionType.SNIPPET, adder, commandId = "general_auto_complete_finish"), addonItems, count)
+                    count++
+                }
+            }
+        }
+    }
+    fun updateEventsCache() {
+        var count = 0
+        addonEvents = getArray()
+        openFileHolder.openProject.addons.values.forEach {
+            it.forEach { ev ->
+                if (ev.type == DocType.EVENT) {
+                    addonEvents.set(count, AutoCompleteItem(this, "EVENT: ${ev.name} (${ev.addon.name})", CompletionType.METHOD, {
+                        var text = ev.pattern
+                        if (text.isEmpty()) text = ev.name
+                    //    text = text.replace("[on]", if (hasOn) "" else "on").replace("\n", "")
+                        text = text.replace("[on]", "").replace("\n", "")
+
+                        "$text:"
+                    }.invoke(), commandId = "general_auto_complete_finish").createObject())
+                    count++
+                }
+            }
+        }
+    }
     fun pasteSelectionFromClipboard() {
 
         val selection = getSelection()
@@ -222,8 +261,7 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
     }
 
     init {
-
-        engine = view.engine
+        view = BrowserView(engine)
         view.setOnKeyPressed { ev ->
 
             if (ev.code == KeyCode.ESCAPE) {
@@ -231,80 +269,58 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
                     openFileHolder.codeManager.sequenceReplaceHandler.cancel()
             }
 
-            if (getOS() == OperatingSystemType.MAC_OS) {
-
-                if (getLocale() == "de_DE") {
-                    if (ev.verifyKeyCombo() && ev.code == KeyCode.Z)
-                        triggerAction("undo")
-                    if (ev.verifyKeyCombo() && ev.code == KeyCode.Y)
-                        triggerAction("redo")
-                } else {
-                    if (ev.verifyKeyCombo() && ev.code == KeyCode.Y)
-                        triggerAction("undo")
-                    if (ev.verifyKeyCombo() && ev.code == KeyCode.Z)
-                        triggerAction("redo")
-                }
-
-            }
-            if (ev.code == KeyCode.C && ev.verifyKeyCombo()) {
-                Platform.runLater {
-                    copySelectionToClipboard()
-                }
-            }
-            if (ev.code == KeyCode.X && ev.verifyKeyCombo()) {
-                Platform.runLater {
-                    val selection = getSelection()
-                    copySelectionToClipboard()
-                    replaceContentInRange(selection.startLineNumber, selection.startColumn, selection.endLineNumber, selection.endColumn, "")
-                }
-            }
-
         }
+        val me = this
+        engine.addLoadListener(object : LoadAdapter() {
+            override fun onStartLoadingFrame(event: StartLoadingEvent?) {
 
-        engine.onAlert = EventHandler<WebEvent<String>> { event ->
-            val popup = Stage()
-            popup.initStyle(StageStyle.UTILITY)
-            popup.initModality(Modality.WINDOW_MODAL)
+            }
 
-            val content = StackPane()
-            content.children.setAll(
-                    Label(event.data)
-            )
-            content.setPrefSize(200.0, 100.0)
-            popup.scene = Scene(content)
-            popup.showAndWait()
-        }
-        view.engine.loadWorker.stateProperty().addListener { _, _, newValue ->
-            if (newValue === Worker.State.FAILED)
-                println("Failed to load webpage")
-            if (newValue === Worker.State.SUCCEEDED) {
-                val win = getWindow()
-                val cbHook = CallbackHook {
-                    val settings = engine.executeScript("getDefaultOptions();") as JSObject
-                    settings.setMember("fontSize", coreManager.configManager.get("font_size"))
-                    settings.setMember("language", extensionToLang(file.name.split(".").last()))
-                    if (coreManager.configManager.get("theme") == "Dark")
-                        settings.setMember("theme", "skript-dark")
-                    else
-                        settings.setMember("theme", "skript-light")
-                    startEditor(settings)
-                    selection = engine.executeScript("selection") as JSObject
-                    rdy(this)
-                    prepareEditorActions()
-                    debugger = WebViewDebugger(this)
-                    if (coreManager.configManager.get("webview_debug") == "true") debugger.start()
-                }
-                win.setMember("skide", eventHandler)
-                win.setMember("cbh", cbHook)
-                Thread {
-                    Thread.sleep(260)
-                    Platform.runLater {
-                        engine.executeScript("cbhReady();")
+            override fun onProvisionalLoadingFrame(event: ProvisionalLoadingEvent?) {
+
+            }
+
+            override fun onFinishLoadingFrame(event: FinishLoadingEvent?) {
+                if (event!!.isMainFrame) {
+                    val win = getWindow()
+                    val cbHook = CallbackHook {
+                        val settings = engine.executeJavaScriptAndReturnValue("getDefaultOptions();").asObject()
+                        settings.setProperty("fontSize", coreManager.configManager.get("font_size"))
+                        settings.setProperty("language", extensionToLang(file.name.split(".").last()))
+                        if (coreManager.configManager.get("theme") == "Dark")
+                            settings.setProperty("theme", "skript-dark")
+                        else
+                            settings.setProperty("theme", "skript-light")
+                        startEditor(settings)
+                        selection = engine.executeJavaScriptAndReturnValue("selection").asObject()
+                        rdy(me)
+                        prepareEditorActions()
+                        debugger = WebViewDebugger(me)
+                        if (coreManager.configManager.get("webview_debug") == "true") debugger.start()
+                        updateAddonCache()
+                        updateEventsCache()
                     }
-                }.start()
+                    win.setProperty("skide", eventHandler)
+                    win.setProperty("cbh", cbHook)
+                    Thread {
+                        Thread.sleep(260)
+                        Platform.runLater {
+                            engine.executeJavaScript("cbhReady();")
+                        }
+                    }.start()
+                }
             }
-        }
-        engine.load(this.javaClass.getResource("/www/index.html").toString())
+
+            override fun onFailLoadingFrame(event: FailLoadingEvent?) {
+            }
+
+            override fun onDocumentLoadedInFrame(event: FrameLoadEvent?) {
+            }
+
+            override fun onDocumentLoadedInMainFrame(event: LoadEvent?) {
+            }
+        })
+        engine.loadURL(this.javaClass.getResource("/www/index.html").toString())
 
     }
 
@@ -404,41 +420,44 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
 
     fun addCommand(key: String, keyId: Int, cb: () -> Unit) {
         if (editorCommands.containsKey(key)) return
-        val cont = getWindow().call("addCondition", key, keyId)
-
+        val window = getWindow()
+        val cont = window.getProperty("addCondition").asFunction().invoke(window, key, keyId)
         val command = EditorCommandBinder(key, cb)
         command.instance = cont as JSObject
         editorCommands[key] = command
     }
 
-    fun createObjectFromMap(fields: Map<String, Any>): JSObject {
+    fun createObjectFromMap(fields: Map<String, Any>): JSValue {
         val obj = getObject()
-        for ((key, value) in fields) obj.setMember(key, value)
+        for ((key, value) in fields) obj.setProperty(key, value)
         return obj
     }
 
     fun triggerAction(id: String) {
-        editor.call("trigger", "_", id)
+        editor.getProperty("trigger").asFunction().invoke(editor, "_", id)
     }
 
     fun addAction(id: String, label: String, cb: () -> Unit) {
         if (editorActions.containsKey(id)) return
         val action = EditorActionBinder(id, cb)
-        action.instance = getWindow().call("addAction", id, label)
+        val window = getWindow()
+        action.instance = window.getProperty("addAction").asFunction().invoke(window, id, label)
         editorActions[id] = action
     }
 
     fun addActionCopyPaste(id: String, label: String, cb: () -> Unit) {
         if (editorActions.containsKey(id)) return
         val action = EditorActionBinder(id, cb)
-        action.instance = getWindow().call("addActionCopyPaste", id, label)
+        val window = getWindow()
+        action.instance = window.getProperty("addActionCopyPaste").asFunction().invoke(window, id, label)
         editorActions[id] = action
     }
 
     fun addAction(id: String, cb: () -> Unit) {
         if (editorActions.containsKey(id)) return
         val action = EditorActionBinder(id, cb)
-        action.instance = getWindow().call("addCommand", id)
+        val window = getWindow()
+        action.instance = window.getProperty("addCommand").asFunction().invoke(window, id)
         editorActions[id] = action
     }
 
@@ -446,7 +465,8 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
         if (!editorActions.containsKey(id)) return
         val action = editorActions[id]
         if (action != null) {
-            (action.instance as JSObject).call("dispose")
+
+            (action.instance as JSObject).getProperty("dispose").asFunction().invoke(action.instance as JSObject)
             editorActions.remove(id)
         }
     }
@@ -456,61 +476,67 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
                          val startColumn: Int, val startLineNumber: Int)
 
     fun getSelection(): Selection {
-        val result = editor.call("getSelection") as JSObject
+        val result = editor.getProperty("getSelection").asFunction().invoke(editor).asObject()
         return Selection(
-                result.getMember("endColumn") as Int,
-                result.getMember("endLineNumber") as Int,
-                result.getMember("positionColumn") as Int,
-                result.getMember("positionLineNumber") as Int,
-                result.getMember("selectionStartColumn") as Int,
-                result.getMember("selectionStartLineNumber") as Int,
-                result.getMember("startColumn") as Int,
-                result.getMember("startLineNumber") as Int)
+                result.getProperty("endColumn").asNumber().integer,
+                result.getProperty("endLineNumber").asNumber().integer,
+                result.getProperty("positionColumn").asNumber().integer,
+                result.getProperty("positionLineNumber").asNumber().integer,
+                result.getProperty("selectionStartColumn").asNumber().integer,
+                result.getProperty("selectionStartLineNumber").asNumber().integer,
+                result.getProperty("startColumn").asNumber().integer,
+                result.getProperty("startLineNumber").asNumber().integer)
     }
 
-    fun getLineCount() = getModel().call("getLineCount") as Int
-    fun getColumnLineAmount(line: Int) = getModel().call("getLineMaxColumn", line) as Int
+    fun getLineCount() = getModel().getProperty("getLineCount").asFunction().invoke(getModel()).asNumber().integer
+    fun getColumnLineAmount(line: Int) = getModel().getProperty("getLineMaxColumn").asFunction().invoke(getModel(), line).asNumber().integer
 
     fun getWordAtPosition(line: Int = getCurrentLine(), column: Int = getCurrentColumn()): String {
-        return (getModel().call("getWordAtPosition", createObjectFromMap(hashMapOf(Pair("lineNumber", line),
-                Pair("column", column)))) as JSObject).getMember("word") as String
+        val model = getModel()
+        return model.getProperty("getWordAtPosition").asFunction().invoke(model, createObjectFromMap(hashMapOf(Pair("lineNumber", line),
+                Pair("column", column)))).asObject().getProperty("word").stringValue
+
     }
 
 
     data class WordAtPos(val word: String, val endColumn: Int, val startColumn: Int)
 
     fun getWordUntilPosition(line: Int = getCurrentLine(), pos: Int = getCurrentColumn()): WordAtPos {
-        val result = getModel().call("getWordUntilPosition",
-                createObjectFromMap(hashMapOf(Pair("column", pos), Pair("lineNumber", line)))) as JSObject
+        val model = getModel()
+        val result = getModel().getProperty("getWordUntilPosition").asFunction().invoke(model, createObjectFromMap(hashMapOf(Pair("column", pos), Pair("lineNumber", line)))).asObject()
 
-        return WordAtPos(result.getMember("word") as String, result.getMember("endColumn") as Int, result.getMember("startColumn") as Int)
+
+        return WordAtPos(result.getProperty("word").stringValue, result.getProperty("endColumn").asNumber().integer, result.getProperty("startColumn").asNumber().integer)
     }
 
 
-    fun moveLineToCenter(line: Int) = editor.call("revealLineInCenter", line)
-    fun setPosition(line: Int, column: Int) = editor.call("setPosition",
-            createObjectFromMap(hashMapOf(Pair("column", column), Pair("lineNumber", line))))
+    fun moveLineToCenter(line: Int) = editor.getProperty("revealLineInCenter").asFunction().invoke(editor, line)
 
-    fun updateOptions(fields: Map<String, Any>) = editor.call("updateOptions", createObjectFromMap(fields))
+    fun setPosition(line: Int, column: Int) = editor.getProperty("setPosition").asFunction().invoke(editor, createObjectFromMap(hashMapOf(Pair("column", column), Pair("lineNumber", line))))
 
-    fun getCurrentLine() = engine.executeScript("editor.getPosition().lineNumber") as Int
-    fun getCurrentColumn() = engine.executeScript("editor.getPosition().column") as Int
+
+    fun updateOptions(fields: Map<String, Any>) = editor.getProperty("updateOptions").asFunction().invoke(editor, createObjectFromMap(fields))
+
+    fun getCurrentLine() = engine.executeJavaScriptAndReturnValue("editor.getPosition().lineNumber").asNumber().integer
+    fun getCurrentColumn() = engine.executeJavaScriptAndReturnValue("editor.getPosition().column").asNumber().integer
     fun setCursorPosition(line: Int, column: Int) = setPosition(line, column)
 
     fun getContentRange(startLine: Int, endLine: Int, startColumn: Int, endColumn: Int): String {
-        return getModel().call("getValueInRange",
-                createObjectFromMap(hashMapOf(Pair("endColumn", endColumn), Pair("endLineNumber", endLine),
-                        Pair("startColumn", startColumn), Pair("startLineNumber", startLine)))) as String
+        val model = getModel()
+        return model.getProperty("getValueInRange").asFunction().invoke(model, createObjectFromMap(hashMapOf(Pair("endColumn", endColumn), Pair("endLineNumber", endLine),
+                Pair("startColumn", startColumn), Pair("startLineNumber", startLine)))).stringValue
+
     }
 
     fun replaceContentInRange(startLine: Int, startCol: Int, endLine: Int, endColumn: Int, replace: String) {
-        val selections = editor.call("getSelections")
+        val selections = editor.getProperty("getSelections").asFunction().invoke(editor).asObject()
         val replaceObject = createObjectFromMap(hashMapOf(Pair("range",
                 createObjectFromMap(hashMapOf(Pair("startLineNumber", startLine), Pair("startColumn", startCol), Pair("endLineNumber", endLine), Pair("endColumn", endColumn)))),
                 Pair("text", replace)))
         val arr = getArray()
-        arr.setSlot(0, replaceObject)
-        getModel().call("pushEditOperations", selections, arr, getFunction())
+        arr.set(0, replaceObject)
+        val model = getModel()
+        model.getProperty("pushEditOperations").asFunction().invoke(model, selections, arr, getFunction())
     }
 
     fun replaceLine(number: Int, text: String) {
@@ -518,15 +544,18 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
     }
 
     fun setSelection(startLine: Int, startCol: Int, endLine: Int, endColumn: Int) {
-        editor.call("setSelection", createObjectFromMap(hashMapOf(Pair("endColumn", endColumn), Pair("endLineNumber", endLine), Pair("startColumn", startCol), Pair("startLineNumber", startLine))))
+        editor.getProperty("setSelection").asFunction().invoke(editor, createObjectFromMap(hashMapOf(Pair("endColumn", endColumn), Pair("endLineNumber", endLine), Pair("startColumn", startCol), Pair("startLineNumber", startLine))))
     }
 
-    fun getLineContent(line: Int) = getModel().call("getLineContent", line) as String
+    fun getLineContent(line: Int): String {
+        val model = getModel()
+        return model.getProperty("getLineContent").asFunction().invoke(model, line).stringValue
+    }
     var text: String
         set(value) {
-            editor.call("setValue", value)
+            editor.getProperty("setValue").asFunction().invoke(editor, value)
         }
         get() {
-            return editor.call("getValue") as String
+            return editor.getProperty("getValue").asFunction().invoke(editor).stringValue
         }
 }

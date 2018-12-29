@@ -19,6 +19,9 @@ import javafx.stage.StageStyle
 import java.awt.Desktop
 import java.net.URI
 import java.util.*
+import com.teamdev.jxbrowser.chromium.BrowserCore
+import com.teamdev.jxbrowser.chromium.BrowserPreferences
+import com.teamdev.jxbrowser.chromium.internal.Environment
 
 
 object GUIManager {
@@ -124,6 +127,11 @@ class JavaFXBootstrapper : Application() {
 
     }
 
+    override fun init() {
+        BrowserPreferences.setChromiumSwitches("--remote-debugging-port=9222");
+        if (Environment.isMac())
+            BrowserCore.initialize()
+    }
     override fun stop() {
 
         GUIManager.closingHooks.forEach {

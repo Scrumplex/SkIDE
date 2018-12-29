@@ -1,15 +1,16 @@
 package com.skide.core.code.autocomplete
 
-import com.skide.Info
 import com.skide.core.code.CodeManager
-import com.skide.core.code.DefinitionFinderResult
 import com.skide.gui.GUIManager
 import com.skide.gui.controllers.GenerateCommandController
 import com.skide.include.*
 import com.skide.utils.EditorUtils
-import netscape.javascript.JSObject
+import com.teamdev.jxbrowser.chromium.JSArray
+import com.teamdev.jxbrowser.chromium.JSObject
+import java.io.File
 import java.util.*
 import kotlin.collections.HashMap
+import kotlin.system.measureTimeMillis
 
 class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder) {
 
@@ -17,6 +18,8 @@ class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder)
     private val addonSupported = project.openProject.addons
     private val keyWordsGen = getKeyWords()
     private val inspectorItems = getSuppressors()
+    private val fileBuffer = HashMap<File, HashMap<Int, Pair<String, JSObject>>>()
+    private val localCache = HashMap<Int, Pair<String, JSObject>>()
     fun createCommand() {
 
         val window = GUIManager.getWindow("fxml/GenerateCommand.fxml", "Generate command", true)
@@ -32,7 +35,8 @@ class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder)
         }
     }
 
-    fun showLocalAutoComplete(array: JSObject) {
+    fun showLocalAutoComplete(array: JSArray) {
+
 
         val nodes = area.openFileHolder.codeManager.parseResult
         val currentLine = area.getCurrentLine()
@@ -57,9 +61,8 @@ class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder)
 
             return
         }
-
-
         val varsToAdd = HashMap<String, AutoCompleteItem>()
+        val used = Vector<String>()
 
         //Croos file Auto-complete
         if (project.coreManager.configManager.get("cross_auto_complete") == "true") {
@@ -75,34 +78,85 @@ class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder)
                         (it.fields["params"] as Vector<*>).forEach {
                             it as MethodParameter
                             paramsStr += ",${it.name}:${it.type}"
-                            insertParams += ",${it.name}"
+                            insertParams += ",${it.type}"
                         }
                         if (paramsStr != "") paramsStr = paramsStr.substring(1)
                         if (insertParams != "") insertParams = insertParams.substring(1)
-                        val con = "$name($paramsStr):$returnType - ${path.name}"
+                        val con = "$name($paramsStr)"
 
                         val insert = "$name($insertParams)"
-                        addSuggestionToObject(AutoCompleteItem(area, con, CompletionType.FUNCTION, insert), array, count)
+                        if (fileBuffer.containsKey(path)) {
+                            val fEntry = fileBuffer[path]!!
+                            if (fEntry.containsKey(it.linenumber) && fEntry[it.linenumber]!!.first == insert) {
+                                array.set(count, fEntry[it.linenumber]!!.second)
+                            } else {
+                                val obj = AutoCompleteItem(area, con, CompletionType.FUNCTION, insert, "$returnType - ${path.name}").createObject()
+                                fEntry[it.linenumber] = Pair(insert, obj)
+
+                                array.set(count, obj)
+                            }
+                        } else {
+                            fileBuffer[path] = HashMap()
+                            val obj = AutoCompleteItem(area, con, CompletionType.FUNCTION, insert, "$returnType - ${path.name}").createObject()
+                            fileBuffer[path]!![it.linenumber] = Pair(insert, obj)
+                            array.set(count, obj)
+                        }
                         count++
                     } else if (it.nodeType == NodeType.SET_VAR && !it.fields.containsKey("invalid")) {
-                        if (it.fields.contains("from_option")) {
-                            val insertText = "{@${it.fields["name"]}}}"
-                            if (!varsToAdd.containsKey(insertText))
-                                varsToAdd[insertText] = AutoCompleteItem(area, "Option: " + (it.fields["name"] as String) + " - ${path.name}", CompletionType.VARIABLE, insertText)
-                        } else if (it.fields["visibility"] == "global") {
-                            val insert = "{${it.fields["name"]}}"
-                            if (!varsToAdd.containsKey(insert))
-                                varsToAdd[insert] = AutoCompleteItem(area, it.fields["name"] as String + " - ${path.name}", CompletionType.VARIABLE, insert)
+                        val theVar: AutoCompleteItem? =
+                                when {
+                                    it.fields.contains("from_option") -> {
+                                        val insertText = "{@${it.fields["name"]}}}"
+                                        AutoCompleteItem(area, (it.fields["name"] as String), CompletionType.VARIABLE, insertText, "Option - ${path.name}")
+                                    }
+                                    it.fields["visibility"] == "global" -> {
+                                        val insert = "{${it.fields["name"]}}"
+                                        AutoCompleteItem(area, it.fields["name"] as String, CompletionType.VARIABLE, insert, "Global Variable - ${path.name}")
+                                    }
+                                    else -> null
+                                }
+                        if (theVar != null && !used.contains(theVar.insertText)) {
+                            used.add(theVar.insertText)
+                            if (fileBuffer.containsKey(path)) {
+                                val fEntry = fileBuffer[path]!!
+                                if (fEntry.containsKey(it.linenumber) && fEntry[it.linenumber]!!.first == theVar.insertText) {
+                                    array.set(count, fEntry[it.linenumber]!!.second)
+                                } else {
+                                    fEntry[it.linenumber] = Pair(theVar.insertText, theVar.createObject())
+                                    array.set(count, fEntry[it.linenumber]!!.second)
+                                }
+                            } else {
+                                fileBuffer[path] = HashMap()
+                                fileBuffer[path]!![it.linenumber] = Pair(theVar.insertText, theVar.createObject())
+                                array.set(count, fileBuffer[path]!![it.linenumber]!!.second)
+                            }
+                            count++
                         }
                     }
                 }
                 EditorUtils.filterByNodeType(NodeType.OPTIONS, internalNodes).forEach {
                     for (child in it.childNodes)
-                        if (child.getContent().isNotEmpty() && child.getContent().isNotBlank()) {
+                        if (child.getContent().isNotEmpty() && child.getContent().isNotBlank() && child.nodeType != NodeType.COMMENT) {
                             val name = child.getContent().split(":").first()
                             val word = "{@$name}"
-                            if (!varsToAdd.containsKey(word))
-                                varsToAdd[word] = AutoCompleteItem(area, name, CompletionType.VARIABLE, word, "Option - ${path.name}")
+                            if (!used.contains(word)) {
+                                used.add(word)
+                                val theVar = AutoCompleteItem(area, name, CompletionType.VARIABLE, word, "Option - ${path.name}")
+                                if (fileBuffer.containsKey(path)) {
+                                    val fEntry = fileBuffer[path]!!
+                                    if (fEntry.containsKey(it.linenumber) && fEntry[it.linenumber]!!.first == theVar.insertText) {
+                                        array.set(count, fEntry[it.linenumber]!!.second)
+                                    } else {
+                                        fEntry[it.linenumber] = Pair(theVar.insertText, theVar.createObject())
+                                        array.set(count, fEntry[it.linenumber]!!.second)
+                                    }
+                                } else {
+                                    fileBuffer[path] = HashMap()
+                                    fileBuffer[path]!![it.linenumber] = Pair(theVar.insertText, theVar.createObject())
+                                    array.set(count, fileBuffer[path]!![it.linenumber]!!.second)
+                                }
+                                count++
+                            }
                         }
                 }
             }
@@ -115,32 +169,47 @@ class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder)
                 it as MethodParameter
                 val insert = "{_" + it.name + "}"
                 if (!varsToAdd.containsKey(insert))
-                    varsToAdd[insert] = AutoCompleteItem(area, it.name + " :" + it.type + " (local)", CompletionType.VARIABLE, insert)
+                    varsToAdd[insert] = AutoCompleteItem(area, it.name, CompletionType.VARIABLE, insert, it.type)
             }
         }
 
         //Loop through this files variable nodes
         vars.forEach {
             if (it.nodeType == NodeType.SET_VAR && !it.fields.containsKey("invalid")) {
-                if (it.fields.contains("from_option")) {
-                    val insertText = "{@${it.fields["name"]}}"
-                    if (!varsToAdd.containsKey(insertText))
-                        varsToAdd[insertText] = AutoCompleteItem(area, (it.fields["name"] as String), CompletionType.VARIABLE, insertText, "Option")
-                } else if (it.fields["visibility"] == "global") {
-                    val insert = "{${it.fields["name"]}}"
-                    if (!varsToAdd.containsKey(insert))
-                        varsToAdd[insert] = AutoCompleteItem(area, it.fields["name"] as String, CompletionType.VARIABLE, insert, "global variable")
+                val theVar: AutoCompleteItem? = when {
+                    it.fields.contains("from_option") -> {
+                        val insertText = "{@${it.fields["name"]}}"
+                        AutoCompleteItem(area, (it.fields["name"] as String), CompletionType.VARIABLE, insertText, "Option")
+                    }
+                    it.fields["visibility"] == "global" -> {
+                        val insert = "{${it.fields["name"]}}"
+                        AutoCompleteItem(area, it.fields["name"] as String, CompletionType.VARIABLE, insert, "Global variable")
 
-                } else if (EditorUtils.getRootOf(it) == parent) {
-                    val insert = "{_${it.fields["name"]}}"
-                    if (!varsToAdd.containsKey(insert))
-                        varsToAdd[insert] = AutoCompleteItem(area, it.fields["name"] as String, CompletionType.VARIABLE, insert, "local variable")
+                    }
+                    EditorUtils.getRootOf(it) == parent -> {
+                        val insert = "{_${it.fields["name"]}}"
+                        AutoCompleteItem(area, it.fields["name"] as String, CompletionType.VARIABLE, insert, "Local variable")
+                    }
+                    else -> null
+                }
+                if (theVar != null && !used.contains(theVar.insertText)) {
+
+                    if (localCache.containsKey(it.linenumber) && localCache[it.linenumber]!!.first == theVar.insertText) {
+                        array.set(count, localCache[it.linenumber]!!.second)
+                    } else {
+                        localCache[it.linenumber] = Pair(theVar.insertText, theVar.createObject())
+                        array.set(count, localCache[it.linenumber]!!.second)
+                    }
+
+                    count++
                 }
             }
         }
+
+        //Add Local Options
         EditorUtils.filterByNodeType(NodeType.OPTIONS, nodes).forEach {
             for (child in it.childNodes)
-                if (child.getContent().isNotEmpty() && child.getContent().isNotBlank()) {
+                if (child.getContent().isNotEmpty() && child.getContent().isNotBlank() && child.nodeType != NodeType.COMMENT) {
                     val name = child.getContent().split(":").first()
                     val word = "{@$name}"
                     if (!varsToAdd.containsKey(word))
@@ -148,7 +217,7 @@ class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder)
                 }
         }
 
-        //Add functions
+        //Add this files functions
         nodes.forEach {
             if (it.nodeType == NodeType.FUNCTION && it.fields.contains("ready")) {
                 val name = it.fields["name"] as String
@@ -159,13 +228,13 @@ class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder)
                 (it.fields["params"] as Vector<*>).forEach { param ->
                     param as MethodParameter
                     paramsStr += ",${param.name}:${param.type}"
-                    insertParams += ",${param.name}"
+                    insertParams += ",${param.type}"
                 }
                 if (paramsStr != "") paramsStr = paramsStr.substring(1)
                 if (insertParams != "") insertParams = insertParams.substring(1)
-                val con = "$name($paramsStr):$returnType"
+                val con = "$name($paramsStr)"
                 val insert = "$name($insertParams)"
-                addSuggestionToObject(AutoCompleteItem(area, con, CompletionType.FUNCTION, insert), array, count)
+                addSuggestionToObject(AutoCompleteItem(area, con, CompletionType.FUNCTION, insert, returnType), array, count)
                 count++
             }
         }
@@ -195,19 +264,21 @@ class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder)
             count++
         }
         if (!manager.sequenceReplaceHandler.computing)
-            addonSupported.values.forEach { addon ->
-                addon.forEach { item ->
-                    if (item.type != DocType.EVENT) {
-                        val name = "${item.name}:${item.type} - ${item.addon.name}"
-                        var adder = (if (item.pattern == "") item.name.toLowerCase() else item.pattern).replace("\n", "")
-                        if (item.type == DocType.CONDITION) if (!lineContent.contains("if ")) adder = "if $adder"
-                        if (item.type == DocType.CONDITION) adder += ":"
-                        addSuggestionToObject(AutoCompleteItem(area, name, CompletionType.SNIPPET, adder, commandId = "general_auto_complete_finish"), array, count)
-                        count++
-                    }
+            if (!lineContent.contains("if "))
+                for (x in 0 until area.addonItems.length()) {
+                    val curr = area.addonItems.get(x).asObject()
+                    val text = curr.getProperty("insertText").stringValue
+                    if (text.endsWith(":") && !text.startsWith("if ")) curr.setProperty("insertText", "if $text")
+                    array.set(count, curr)
+                    count++
                 }
-            }
+            else
+                for (x in 0 until area.addonItems.length()) {
+                    array.set(count, area.addonItems.get(x))
+                    count++
+                }
         varsToAdd.clear()
+        used.clear()
     }
 
     private fun getKeyWords(): Vector<AutoCompleteItem> {
@@ -226,28 +297,23 @@ class AutoCompleteCompute(val manager: CodeManager, val project: OpenFileHolder)
         return vector
     }
 
-    fun showGlobalAutoComplete(array: JSObject) {
+    fun showGlobalAutoComplete(array: JSArray) {
 
         var count = 0
-        array.setSlot(count, AutoCompleteItem(area, "function", CompletionType.FUNCTION, "function () :: :", "Generates a function", "This will create a function").createObject(area.getObject()))
+        array.set(count, AutoCompleteItem(area, "function", CompletionType.FUNCTION, "function () :: :", "Generates a function", "This will create a function").createObject())
         count++
-        array.setSlot(count, AutoCompleteItem(area, "Command", CompletionType.CONSTRUCTOR, "", "Generates a Command", "This will open a Window to create a ", commandId = "create_command").createObject(area.getObject()))
+        array.set(count, AutoCompleteItem(area, "Command", CompletionType.CONSTRUCTOR, "", "Generates a Command", "This will open a Window to create a ", commandId = "create_command").createObject())
         count++
         val hasOn = area.getLineContent(area.getCurrentLine()).startsWith("on")
-        area.openFileHolder.openProject.addons.values.forEach {
-            it.forEach { ev ->
-                if (ev.type == DocType.EVENT) {
-                    array.setSlot(count, AutoCompleteItem(area, "EVENT: ${ev.name} (${ev.addon.name})", CompletionType.METHOD, {
-                        var text = ev.pattern
-                        if (text.isEmpty()) text = ev.name
-                        text = text.replace("[on]", if (hasOn) "" else "on").replace("\n", "")
 
-                        "$text:"
-                    }.invoke(), commandId = "general_auto_complete_finish").createObject(area.getObject()))
-
-                    count++
-                }
+        for (x in 0 until area.addonEvents.length()) {
+            val current = area.addonEvents[x]
+            if (!hasOn) {
+                val curr = current.asObject().getProperty("insertText").stringValue
+                if (!curr.startsWith("on", true)) current.asObject().setProperty("insertText", "on$curr")
             }
+            array.set(count, current)
+            count++
         }
         inspectorItems.forEach {
             addSuggestionToObject(it, array, count)

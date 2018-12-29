@@ -1,7 +1,8 @@
 package com.skide.core.code.autocomplete
 
 import com.skide.core.code.CodeArea
-import netscape.javascript.JSObject
+import com.teamdev.jxbrowser.chromium.JSArray
+import com.teamdev.jxbrowser.chromium.JSObject
 
 enum class CompletionType(val num:Int) {
 
@@ -26,21 +27,22 @@ enum class CompletionType(val num:Int) {
     VARIABLE(5)
 
 }
-fun addSuggestionToObject(sugg:AutoCompleteItem, target: JSObject, index:Int) {
-    target.setSlot(index, sugg.createObject())
+fun addSuggestionToObject(sugg:AutoCompleteItem, target: JSArray, index:Int) {
+    target.setProperty(index, sugg.createObject())
 }
 class AutoCompleteItem(val area:CodeArea, val label:String, val kind:CompletionType, val insertText:String, val detail:String = "", val documentation:String = "", val commandId:String = "") {
 
+
     fun createObject(obj:JSObject = area.getObject()): JSObject {
 
-        obj.setMember("kind", kind.num)
-        obj.setMember("label", label)
-        obj.setMember("insertText", insertText)
-        obj.setMember("detail", detail)
-        obj.setMember("documentation", documentation)
+        obj.setProperty("kind", kind.num)
+        obj.setProperty("label", label)
+        obj.setProperty("insertText", insertText)
+        obj.setProperty("detail", detail)
+        obj.setProperty("documentation", documentation)
 
         if(commandId != "") {
-           obj.setMember("command",  area.createObjectFromMap(hashMapOf(Pair("title", ""), Pair("id", commandId))))
+           obj.setProperty("command",  area.createObjectFromMap(hashMapOf(Pair("title", ""), Pair("id", commandId))))
         }
 
         return obj

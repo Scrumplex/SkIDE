@@ -37,7 +37,7 @@ if (project.hasProperty("jfx-win")) {
 
 group = 'com.skide'
 version = '0.0.6'
-mainClassName = 'com.skide.MainKt'
+mainClassName = 'com.skide.CoreManager'
 
 sourceCompatibility = 1.8
 targetCompatibility = 1.8
@@ -61,6 +61,17 @@ dependencies {
     compile "org.json:json:20180813"
     compile name: 'terminalfx-1.3'
     compile name: 'analytics'
+    compile name: 'jxbrowser-6.22.1'
+    compile name: 'jxlicense-1.0'
+    if(platform == "win") {
+        compile name: 'jxbrowser-win64-6.22.1'
+    }  
+    if(platform == "mac") {
+        compile name: 'jxbrowser-mac-6.22.1'
+    }
+    if(platform == "linux") {
+        compile name: 'jxbrowser-linux64-6.22.1'
+    }
     compile 'com.jcraft:jsch:0.1.54'
     compile 'commons-net:commons-net:3.6'
     testCompile group: 'junit', name: 'junit', version: '4.12'
