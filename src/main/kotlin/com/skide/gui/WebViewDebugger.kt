@@ -2,6 +2,7 @@ package com.skide.gui
 
 import com.skide.core.code.CodeArea
 import com.teamdev.jxbrowser.chromium.Browser
+import com.teamdev.jxbrowser.chromium.BrowserType
 import com.teamdev.jxbrowser.chromium.javafx.BrowserView
 import javafx.application.Platform
 import javafx.scene.Scene
@@ -18,17 +19,24 @@ class WebViewDebugger(val area: CodeArea) {
     lateinit var stage: Stage
 
     private fun setupStage() {
+
         val debugBrowser = BrowserView(Browser())
-        val pane = BorderPane()
-        pane.center = debugBrowser
-        stage = Stage()
-        stage.icons.add(Image(javaClass.getResource("/images/icon.png").toExternalForm()))
-        stage.title = "Debugger"
-        stage.initStyle(StageStyle.UTILITY)
-        stage.scene = Scene(pane, 800.0, 600.0)
+        Platform.runLater {
+            val pane = BorderPane()
+            pane.center = debugBrowser
+            stage = Stage()
+            stage.icons.add(Image(javaClass.getResource("/images/icon.png").toExternalForm()))
+            stage.title = "Debugger"
+            stage.initStyle(StageStyle.UTILITY)
+            stage.scene = Scene(pane, 800.0, 600.0)
+            stage.show()
 
 
-        debugBrowser.browser.loadURL(engine.remoteDebuggingURL)
+           Thread{
+               debugBrowser.browser.loadURL(engine.remoteDebuggingURL)
+
+           }.start()
+        }
     }
 
     fun start() {
@@ -38,10 +46,9 @@ class WebViewDebugger(val area: CodeArea) {
         }
         initialized = true
         Thread {
-            Platform.runLater {
-                setupStage()
-                stage.show()
-            }
+
+            setupStage()
+
 
         }.start()
     }

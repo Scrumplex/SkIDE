@@ -11,10 +11,7 @@ import com.skide.gui.WebViewDebugger
 import com.skide.include.DocType
 import com.skide.include.OpenFileHolder
 import com.skide.utils.extensionToLang
-import com.teamdev.jxbrowser.chromium.Browser
-import com.teamdev.jxbrowser.chromium.JSArray
-import com.teamdev.jxbrowser.chromium.JSObject
-import com.teamdev.jxbrowser.chromium.JSValue
+import com.teamdev.jxbrowser.chromium.*
 import com.teamdev.jxbrowser.chromium.events.*
 import com.teamdev.jxbrowser.chromium.javafx.BrowserView
 import javafx.application.Platform
@@ -22,7 +19,9 @@ import javafx.scene.input.Clipboard
 import javafx.scene.input.ClipboardContent
 import javafx.scene.input.DataFormat
 import javafx.scene.input.KeyCode
+import java.io.DataInputStream
 import java.io.File
+import java.net.URL
 import kotlin.system.measureTimeMillis
 
 
@@ -170,8 +169,8 @@ class EditorCommandBinder(val id: String, val cb: () -> Unit) {
 class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea) -> Unit) {
 
     var line = 1
-    var view:BrowserView
-    var engine = Browser()
+    lateinit var view: BrowserView
+    lateinit var engine: Browser
     lateinit var editor: JSObject
     lateinit var selection: JSObject
     lateinit var openFileHolder: OpenFileHolder
@@ -187,8 +186,8 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
         }
     }
 
-    lateinit var addonItems:JSArray
-    lateinit var addonEvents:JSArray
+    lateinit var addonItems: JSArray
+    lateinit var addonEvents: JSArray
     fun getArray() = engine.executeJavaScriptAndReturnValue("getArr();").asArray()
     fun getObject() = engine.executeJavaScriptAndReturnValue("getObj();").asObject()
     fun getFunction() = engine.executeJavaScriptAndReturnValue("getFunc();").asFunction()
@@ -210,14 +209,16 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
     }
 
     fun focusEditor() {
-        while (!view.isFocused) view.requestFocus()
-        editor.getProperty("call").asFunction().invoke(editor)
+        Platform.runLater {
+            if (!view.isFocused) view.requestFocus()
+            editor.getProperty("focus").asFunction().invoke(editor)
+        }
     }
 
     fun updateAddonCache() {
         var count = 0
         addonItems = getArray()
-        openFileHolder.openProject.addons.values.forEach {addon ->
+        openFileHolder.openProject.addons.values.forEach { addon ->
             addon.forEach { item ->
                 if (item.type != DocType.EVENT) {
                     val name = "${item.name}:${item.type} - ${item.addon.name}"
@@ -230,6 +231,7 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
             }
         }
     }
+
     fun updateEventsCache() {
         var count = 0
         addonEvents = getArray()
@@ -239,7 +241,7 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
                     addonEvents.set(count, AutoCompleteItem(this, "EVENT: ${ev.name} (${ev.addon.name})", CompletionType.METHOD, {
                         var text = ev.pattern
                         if (text.isEmpty()) text = ev.name
-                    //    text = text.replace("[on]", if (hasOn) "" else "on").replace("\n", "")
+                        //    text = text.replace("[on]", if (hasOn) "" else "on").replace("\n", "")
                         text = text.replace("[on]", "").replace("\n", "")
 
                         "$text:"
@@ -249,6 +251,7 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
             }
         }
     }
+
     fun pasteSelectionFromClipboard() {
 
         val selection = getSelection()
@@ -259,68 +262,101 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
 
         }
     }
-
-    init {
-        view = BrowserView(engine)
-        view.setOnKeyPressed { ev ->
-
-            if (ev.code == KeyCode.ESCAPE) {
-                if (openFileHolder.codeManager.isSetup && openFileHolder.codeManager.sequenceReplaceHandler.computing)
-                    openFileHolder.codeManager.sequenceReplaceHandler.cancel()
-            }
-
+    private fun getMimeType(path: String): String {
+        if (path.endsWith(".html")) {
+            return "text/html"
         }
-        val me = this
-        engine.addLoadListener(object : LoadAdapter() {
-            override fun onStartLoadingFrame(event: StartLoadingEvent?) {
+        if (path.endsWith(".css")) {
+            return "text/css"
+        }
+        return if (path.endsWith(".js")) {
+            "text/javascript"
+        } else "text/html"
+    }
+    init {
 
-            }
-
-            override fun onProvisionalLoadingFrame(event: ProvisionalLoadingEvent?) {
-
-            }
-
-            override fun onFinishLoadingFrame(event: FinishLoadingEvent?) {
-                if (event!!.isMainFrame) {
-                    val win = getWindow()
-                    val cbHook = CallbackHook {
-                        val settings = engine.executeJavaScriptAndReturnValue("getDefaultOptions();").asObject()
-                        settings.setProperty("fontSize", coreManager.configManager.get("font_size"))
-                        settings.setProperty("language", extensionToLang(file.name.split(".").last()))
-                        if (coreManager.configManager.get("theme") == "Dark")
-                            settings.setProperty("theme", "skript-dark")
-                        else
-                            settings.setProperty("theme", "skript-light")
-                        startEditor(settings)
-                        selection = engine.executeJavaScriptAndReturnValue("selection").asObject()
-                        rdy(me)
-                        prepareEditorActions()
-                        debugger = WebViewDebugger(me)
-                        if (coreManager.configManager.get("webview_debug") == "true") debugger.start()
-                        updateAddonCache()
-                        updateEventsCache()
-                    }
-                    win.setProperty("skide", eventHandler)
-                    win.setProperty("cbh", cbHook)
-                    Thread {
-                        Thread.sleep(260)
-                        Platform.runLater {
-                            engine.executeJavaScript("cbhReady();")
-                        }
-                    }.start()
+        Thread {
+            engine = Browser()
+            view = BrowserView(engine)
+            val browserContext = engine.context
+            val protocolService = browserContext.protocolService
+            protocolService.setProtocolHandler("jar", ProtocolHandler { request ->
+                try {
+                    val response = URLResponse()
+                    val path = URL(request.url)
+                    val inputStream = path.openStream()
+                    val stream = DataInputStream(inputStream)
+                    val data = ByteArray(stream.available())
+                    stream.readFully(data)
+                    response.data = data
+                    val mimeType = getMimeType(path.toString())
+                    response.headers.setHeader("Content-Type", mimeType)
+                    return@ProtocolHandler response
+                } catch (ignored: Exception) {
                 }
-            }
 
-            override fun onFailLoadingFrame(event: FailLoadingEvent?) {
-            }
+                null
+            })
+            view.setOnKeyPressed { ev ->
 
-            override fun onDocumentLoadedInFrame(event: FrameLoadEvent?) {
-            }
+                if (ev.code == KeyCode.ESCAPE) {
+                    if (openFileHolder.codeManager.isSetup && openFileHolder.codeManager.sequenceReplaceHandler.computing)
+                        openFileHolder.codeManager.sequenceReplaceHandler.cancel()
+                }
 
-            override fun onDocumentLoadedInMainFrame(event: LoadEvent?) {
             }
-        })
-        engine.loadURL(this.javaClass.getResource("/www/index.html").toString())
+            val me = this
+            engine.addLoadListener(object : LoadAdapter() {
+                override fun onStartLoadingFrame(event: StartLoadingEvent?) {
+
+                }
+
+                override fun onProvisionalLoadingFrame(event: ProvisionalLoadingEvent?) {
+
+                }
+
+                override fun onFinishLoadingFrame(event: FinishLoadingEvent?) {
+                    if (event!!.isMainFrame) {
+                        val win = getWindow()
+                        val cbHook = CallbackHook {
+                            val settings = engine.executeJavaScriptAndReturnValue("getDefaultOptions();").asObject()
+                            settings.setProperty("fontSize", coreManager.configManager.get("font_size"))
+                            settings.setProperty("language", extensionToLang(file.name.split(".").last()))
+                            if (coreManager.configManager.get("theme") == "Dark")
+                                settings.setProperty("theme", "skript-dark")
+                            else
+                                settings.setProperty("theme", "skript-light")
+                            startEditor(settings)
+                            selection = engine.executeJavaScriptAndReturnValue("selection").asObject()
+                            rdy(me)
+                            prepareEditorActions()
+                            debugger = WebViewDebugger(me)
+                            if (coreManager.configManager.get("webview_debug") == "true") debugger.start()
+                            updateAddonCache()
+                            updateEventsCache()
+                        }
+                        win.setProperty("skide", eventHandler)
+                        win.setProperty("cbh", cbHook)
+                        Thread {
+                            Thread.sleep(260)
+                            Platform.runLater {
+                                engine.executeJavaScript("cbhReady();")
+                            }
+                        }.start()
+                    }
+                }
+
+                override fun onFailLoadingFrame(event: FailLoadingEvent?) {
+                }
+
+                override fun onDocumentLoadedInFrame(event: FrameLoadEvent?) {
+                }
+
+                override fun onDocumentLoadedInMainFrame(event: LoadEvent?) {
+                }
+            })
+            engine.loadURL(this.javaClass.getResource("/www/index.html").toString())
+        }.start()
 
     }
 
@@ -551,6 +587,7 @@ class CodeArea(val coreManager: CoreManager, val file: File, val rdy: (CodeArea)
         val model = getModel()
         return model.getProperty("getLineContent").asFunction().invoke(model, line).stringValue
     }
+
     var text: String
         set(value) {
             editor.getProperty("setValue").asFunction().invoke(editor, value)
